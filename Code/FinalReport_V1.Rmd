@@ -1,0 +1,538 @@
+---
+title: "Forecasting Ecuador’s Oil Production: Assessing the impact of halting exploitation in Block 43-ITT"
+author: "Leines Nicole & Martinez Sayra"
+date: "2025-04-25"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,          # show code; hide if not needed
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## Packages
+
+```{r package, message=FALSE, warning=FALSE}
+library(lubridate)
+library(ggplot2)
+library(forecast)  
+library(Kendall)
+library(tseries)
+library(outliers)
+library(tidyverse)
+library(smooth)
+library(zoo)
+library(kableExtra)
+library(readxl)
+library(writexl)
+library(ggplotify)
+library(janitor)
+```
+
+## Directory
+
+```{r}
+base_dir <- "D:/Geani/Box/Home Folder gnl13/Private/1 Academics/3 Time series/LeinesMartinez_ENV797_TSA_FinalProject" # Update this
+data_dir <- file.path(base_dir, "Data")
+output_dir <- file.path(base_dir, "Output")
+images_dir <-file.path(base_dir, "Images")
+
+file1 <- "oil_production_EC_2007_2024.xlsx"
+file2 <- "oil_price_2007-2024.xlsx"
+file3 <- "annual_oil_production_1972-2023.xlsx"
+file4 <- "oil_data_2007_2024.xlsx"
+
+file_path1 <- file.path(data_dir, file1)
+file_path2 <- file.path(data_dir, file2)
+file_path3 <- file.path(data_dir, file3)
+file_path4 <- file.path(data_dir, file4)
+
+oil_production <- read_excel(file_path1) %>% clean_names()
+oil_prices <- read_excel(file_path2) %>% clean_names()
+annual_oil_production <- read_excel(file_path3) %>% clean_names()
+oil_data <- read_excel(file_path4) %>% clean_names()
+
+```
+
+## Introduction
+
+Ecuador's economy has been heavily reliant on oil exploitation for over five decades. As a result, the oil revenue is the most important driver of the national GDP (García-Alban et al., 202).
+
+
+```{r}
+image_path1 <- file.path(images_dir, "Image1.png")
+knitr::include_graphics(image_path1)
+
+```
+
+
+## Motivation
+
+## Relevance
+
+## Objectives
+
+## Dataset information
+
+## Analysis (Methods and Models)
+
+
+
+## Wrangling data - Aggregate the hourly data to daily using averages
+
+```{r}
+
+#Demand
+
+# from wide (h1–h24) to long format, convert hour to integer
+load_long <- load_raw %>%
+  pivot_longer(
+    cols        = starts_with("h"),
+    names_to    = "hour",
+    names_prefix= "h",
+    values_to   = "load_kwh"
+  ) %>%
+  mutate(
+    date     = as_date(date),
+    hour     = as.integer(hour),
+    meter_id = factor(meter_id)
+  )
+
+# compute per‐meter daily mean
+daily_load <- load_long %>%
+  group_by(meter_id, date) %>%
+  summarise(
+    daily_load_kwh = mean(load_kwh, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+```{r}
+# Temperature 
+
+# daily mean across all hours and stations
+daily_temp <- temp_raw %>%
+  pivot_longer(
+    cols         = starts_with("t_ws"),
+    names_to     = "station",
+    names_prefix = "t_ws",
+    values_to    = "temp_c"
+  ) %>%
+  mutate(date = as_date(date)) %>%
+  group_by(date) %>%
+  summarise(
+    mean_temp_c = mean(temp_c, na.rm = TRUE),
+    .groups     = "drop"
+  )
+
+# Relative humidity
+daily_hum <- hum_raw %>%
+  pivot_longer(
+    cols         = starts_with("rh_ws"),
+    names_to     = "station",
+    names_prefix = "rh_ws",
+    values_to    = "rh_pct"
+  ) %>%
+  mutate(date = as_date(date)) %>%
+  group_by(date) %>%
+  summarise(
+    mean_rh_pct = mean(rh_pct, na.rm = TRUE),
+    .groups     = "drop"
+  )
+
+
+```
+
+```{r}
+
+daily_data <- daily_load %>%
+  inner_join(daily_temp, by = "date") %>%
+  inner_join(daily_hum,  by = "date")
+
+# total system demand per day, plus averaged covariates
+agg_daily <- daily_data %>%
+  group_by(date) %>%
+  summarise(
+    demand_kwh = sum(daily_load_kwh, na.rm = TRUE),
+    temp_c     = mean(mean_temp_c,  na.rm = TRUE),
+    rh_pct     = mean(mean_rh_pct,  na.rm = TRUE),
+    .groups    = "drop"
+  )
+
+```
+
+```{r}
+
+agg_daily %>%
+  slice_head(n = 6) %>%
+  kable(
+    caption = "First six days of aggregated daily demand, temperature, and humidity",
+    digits  = 2
+  ) %>%
+  kable_styling(full_width = FALSE)
+
+```
+
+## Define training and testing sets
+
+```{r}
+
+
+train <- agg_daily %>%
+  filter(date >= ymd("2005-01-01") & date <= ymd("2009-12-31"))
+
+test <- agg_daily %>%
+  filter(date >= ymd("2010-01-01") & date <= ymd("2010-02-28"))
+
+full_train <- agg_daily %>%
+  filter(date >= ymd("2005-01-01") & date <= ymd("2010-12-31"))
+
+# 5.2 Construct msts objects with weekly and yearly seasonality
+y_train <- msts(
+  train$demand_kwh,
+  seasonal.periods = c(7, 365.25),
+  start             = c(2005, 1)
+)
+
+y_test <- msts(
+  test$demand_kwh,
+  seasonal.periods = c(7, 365.25),
+  start             = c(2010, 1)
+)
+
+y_full <-  msts(
+  full_train$demand_kwh,
+  seasonal.periods = c(7, 365.25),
+  start             = c(2005, 1)
+)
+
+```
+
+## Forecasting until 2010
+
+```{r}
+
+# 1) Forecast horizon
+h <- length(y_test)
+
+# 2) Fit each model
+
+# ARIMA + Fourier + weather regressors
+f_tr          <- fourier(y_train, K = c(2,6))
+f_ts          <- fourier(y_train, K = c(2,6), h = h)
+fit_reg       <- auto.arima(
+                   y_train,
+                   seasonal = FALSE,
+                   xreg     = cbind(f_tr, train$temp_c, train$rh_pct)
+                 )
+fc_reg        <- forecast(
+                   fit_reg,
+                   h    = h,
+                   xreg = cbind(f_ts, test$temp_c, test$rh_pct)
+                 )        
+
+
+# ETS with Box–Cox (lambda chosen to stabilize MAPE)
+fc_ets_bc     <- forecast(ets(y_train, lambda="auto"), h = h)
+
+fc_naive       <- naive(y_train, h = h)
+fc_tbats       <- forecast(tbats(y_train),   h = h)
+
+# TBATS with weather covariates
+xreg_temp      <- matrix(train$temp_c,  ncol = 1)
+xreg_test_temp <- matrix(test$temp_c,   ncol = 1)
+xreg_hum       <- matrix(train$rh_pct,  ncol = 1)
+xreg_test_hum  <- matrix(test$rh_pct,   ncol = 1)
+xreg_both      <- cbind(train$temp_c,  train$rh_pct)
+xreg_test_both <- cbind(test$temp_c,   test$rh_pct)
+
+fc_tbats_temp  <- forecast(tbats(y_train, xreg = xreg_temp),  h = h, xreg = xreg_test_temp)
+fc_tbats_hum   <- forecast(tbats(y_train, xreg = xreg_hum),   h = h, xreg = xreg_test_hum)
+fc_tbats_both  <- forecast(tbats(y_train, xreg = xreg_both),  h = h, xreg = xreg_test_both)
+
+
+```
+
+```{r results='asis'}
+# 3) Extract accuracy metrics
+models <- list(
+    `ARIMA+F+Wx`   = fc_reg,
+    `ETS-BoxCox`   = fc_ets_bc,
+    Naive          = fc_naive,
+    TBATS          = fc_tbats,
+  `TBATS+Temp`   = fc_tbats_temp,
+  `TBATS+Hum`    = fc_tbats_hum
+)
+
+accuracy_tbl <- purrr::map_df(models, function(fit) {
+  acc <- accuracy(fit, y_test)
+  # if accuracy() returned two rows (train & test), use the test row
+  idx <- if (nrow(acc) == 2) 2 else 1
+  # pull out the six metrics we want
+  acc[idx, c("ME","RMSE","MAE","MAPE","MASE","ACF1"), drop=FALSE] %>%
+    as_tibble(rownames = "dummy") %>%
+    select(-dummy)
+}, .id = "Model")
+
+# 4) Render comparison table, sorted by MAPE
+accuracy_tbl %>%
+  arrange(MAPE) %>%
+  kable(
+    caption = "Forecast accuracy comparison (all models)",
+    digits  = 2
+  ) %>%
+  kable_styling(full_width = FALSE) %>%
+  row_spec(1, bold = TRUE, background = "#F0F0F0")  # highlight best MAPE
+```
+
+## Forecasting until 2011- top 5 models - with all information
+
+```{r}
+
+forecast_dates <- seq(as.Date("2011-01-01"), as.Date("2011-02-28"), by = "day")
+h_future       <- length(forecast_dates)  # 59
+
+```
+
+```{r}
+#Model 1: # ETS with Box–Cox (lambda chosen to stabilize MAPE)
+fc_ets_bc_full     <- forecast(ets(y_full, lambda="auto"), h = h_future)
+
+print(fc_ets_bc_full)
+plot(fc_ets_bc_full)
+
+#Plot model + observed data
+autoplot(y_full) +
+  autolayer(fc_ets_bc_full, series="ETS with Box–Cox",PI=FALSE) +
+  ylab("Electricity demand")
+
+
+checkresiduals(fc_ets_bc_full)
+```
+
+```{r}
+# Export to CSV 
+submission <- template %>%
+  mutate(
+    date = format(forecast_dates, "%Y-%m-%d"),
+    load = as.numeric(fc_ets_bc_full$mean)
+  )
+out_name <- "submission_final_ETS_with_Box–Cox.csv"
+readr::write_csv(submission, file.path(output_dir, out_name))
+```
+
+```{r}
+#Model 2: Naive
+
+fc_naive_full <- naive(y_full, h = h_future)
+print(fc_naive_full)
+plot(fc_naive_full)
+
+#Plot model + observed data
+autoplot(y_full) +
+  autolayer(fc_naive_full, series="Naive",PI=FALSE) +
+  ylab("Electricity demand")
+
+
+checkresiduals(fc_naive_full)
+
+```
+
+```{r}
+
+# Export to CSV 
+submission <- template %>%
+  mutate(
+    date = format(forecast_dates, "%Y-%m-%d"),
+    load = as.numeric(fc_naive_full$mean)
+  )
+out_name <- "submission_final_Naive.csv"
+readr::write_csv(submission, file.path(output_dir, out_name))
+
+```
+
+```{r}
+#Model 3: TBATS
+
+fc_tbats_full       <- forecast(tbats(y_full),   h = h_future)
+print(fc_tbats_full)
+plot(fc_tbats_full)
+
+#Plot model + observed data
+autoplot(y_full) +
+  autolayer(fc_tbats_full, series="TBATS",PI=FALSE) +
+  ylab("Electricity demand")
+
+
+checkresiduals(fc_tbats_full)
+
+
+```
+
+```{r}
+
+# Export to CSV 
+submission <- template %>%
+  mutate(
+    date = format(forecast_dates, "%Y-%m-%d"),
+    load = as.numeric(fc_tbats_full$mean)
+  )
+out_name <- "submission_final_TBATS.csv"
+readr::write_csv(submission, file.path(output_dir, out_name))
+
+```
+
+```{r}
+
+
+#Model 4-6: TBATS + regressors
+
+
+#–– 1) Forecast temp & humidity into 2011 (no drift/mean) ––#
+fit_temp <- auto.arima(full_train$temp_c, seasonal=FALSE,
+                       allowdrift=FALSE, allowmean=FALSE)
+fit_hum  <- auto.arima(full_train$rh_pct, seasonal=FALSE,
+                       allowdrift=FALSE, allowmean=FALSE)
+
+fc_temp <- forecast(fit_temp, h = h_future)$mean
+fc_hum  <- forecast(fit_hum,  h = h_future)$mean
+
+#–– 2) Build xreg matrices – just the covariates ––#
+# Historical (2005–2010):
+xreg_full_temp <- matrix(full_train$temp_c, ncol=1)
+xreg_full_hum  <- matrix(full_train$rh_pct, ncol=1)
+xreg_full_both <- cbind(full_train$temp_c, full_train$rh_pct)
+
+# Future (2011):
+xreg_future_temp <- matrix(fc_temp, ncol=1)
+xreg_future_hum  <- matrix(fc_hum,  ncol=1)
+xreg_future_both <- cbind(as.numeric(fc_temp), as.numeric(fc_hum))
+
+
+
+
+
+
+
+```
+
+```{r}
+
+# Model 4: TBATS + Temp 
+fit_tb_temp_full   <- tbats(y_full, xreg = xreg_full_temp)
+fc_tbats_temp_full <- forecast(fit_tb_temp_full,
+                          h    = h_future,
+                          xreg = xreg_future_temp)
+
+print(fc_tbats_temp_full)
+plot(fc_tbats_temp_full)
+
+#Plot model + observed data
+autoplot(y_full) +
+  autolayer(fc_tbats_temp_full, series="TBATS",PI=FALSE) +
+  ylab("Electricity demand")
+
+
+checkresiduals(fc_tbats_temp_full)
+```
+
+```{r}
+
+# Export to CSV 
+submission <- template %>%
+  mutate(
+    date = format(forecast_dates, "%Y-%m-%d"),
+    load = as.numeric(fc_tbats_temp_full$mean)
+  )
+out_name <- "submission_final_TBATS_temp.csv"
+readr::write_csv(submission, file.path(output_dir, out_name))
+
+```
+
+```{r}
+
+# Model TBATS + Hum 
+fit_tb_hum_full   <- tbats(y_full, xreg = xreg_full_hum)
+fc_tbats_hum_full <- forecast(fit_tb_hum_full,
+                         h    = h_future,
+                         xreg = xreg_future_hum)
+
+print(fc_tbats_hum_full)
+plot(fc_tbats_hum_full)
+
+#Plot model + observed data
+autoplot(y_full) +
+  autolayer(fc_tbats_hum_full, series="TBATS",PI=FALSE) +
+  ylab("Electricity demand")
+
+
+checkresiduals(fc_tbats_hum_full)
+```
+
+```{r}
+
+# Export to CSV 
+submission <- template %>%
+  mutate(
+    date = format(forecast_dates, "%Y-%m-%d"),
+    load = as.numeric(fc_tbats_hum_full$mean)
+  )
+out_name <- "submission_final_TBATS_hum.csv"
+readr::write_csv(submission, file.path(output_dir, out_name))
+
+```
+
+```{r}
+
+# Model 6: TBATS + Both
+fit_tb_both_full   <- tbats(y_full, xreg = xreg_full_both)
+fc_tbats_both_full <- forecast(fit_tb_both_full,
+                          h    = h_future,
+                          xreg = xreg_future_both)
+
+print(fc_tbats_both_full)
+plot(fc_tbats_both_full)
+
+#Plot model + observed data
+autoplot(y_full) +
+  autolayer(fc_tbats_both_full, series="TBATS",PI=FALSE) +
+  ylab("Electricity demand")
+
+
+checkresiduals(fc_tbats_both_full)
+```
+
+```{r}
+
+# Export to CSV 
+submission <- template %>%
+  mutate(
+    date = format(forecast_dates, "%Y-%m-%d"),
+    load = as.numeric(fc_tbats_both_full$mean)
+  )
+out_name <- "submission_final_TBATS_both.csv"
+readr::write_csv(submission, file.path(output_dir, out_name))
+
+```
+
+## Graph
+
+```{r}
+autoplot(y_full) +
+  autolayer(fc_ets_bc_full, PI=FALSE, series="ETS") +
+  autolayer(fc_naive_full, PI=FALSE, series="NAIVE") +
+  autolayer(fc_tbats_full,PI=FALSE, series="TBATS") +
+  autolayer(fc_tbats_temp_full,PI=FALSE, series="TBATS+T") +
+  autolayer(fc_tbats_hum_full,PI=FALSE, series="TBATS+H") +
+  autolayer(fc_tbats_both_full,PI=FALSE, series="TBATS+BOTH") +
+  xlab("Day") + ylab("Daily Electricity demand") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+### Summary and Conclusions
