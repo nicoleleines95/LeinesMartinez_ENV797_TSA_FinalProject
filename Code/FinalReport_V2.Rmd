@@ -1,0 +1,1041 @@
+---
+title: "Forecasting Ecuador’s Oil Production: Assessing the impact of halting exploitation in Block 43-ITT"
+author: "Leines Nicole & Martinez Sayra"
+date: "2025-04-25"
+output: 
+  pdf_document: 
+    citation_package: default  # Use "default" for automatic citation handling
+  html_document: 
+    citation_package: bibtex  # Use "bibtex" for HTML output
+bibliography: D:/Geani/Box/Home Folder gnl13/Private/1 Academics/3 Time series/LeinesMartinez_ENV797_TSA_FinalProject/references.bib
+csl: D:/Geani/Box/Home Folder gnl13/Private/1 Academics/3 Time series/LeinesMartinez_ENV797_TSA_FinalProject/apa.csl 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,          # show code; hide if not needed
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+
+
+```{r packages, echo=F, results='hide', warning=FALSE}
+
+## Packages
+
+library(lubridate)
+library(ggplot2)
+library(forecast)  
+library(Kendall)
+library(tseries)
+library(outliers)
+library(tidyverse)
+library(smooth)
+library(zoo)
+library(kableExtra)
+library(readxl)
+library(writexl)
+library(ggplotify)
+library(janitor)
+library(patchwork)
+library(scales)
+```
+
+
+
+```{r Directory, echo=F, results='hide', warning=FALSE}
+
+## Directory
+
+base_dir <- "D:/Geani/Box/Home Folder gnl13/Private/1 Academics/3 Time series/LeinesMartinez_ENV797_TSA_FinalProject" # Update this
+data_dir <- file.path(base_dir, "Data")
+output_dir <- file.path(base_dir, "Output")
+images_dir <-file.path(base_dir, "Images")
+
+file1 <- "oil_production_EC_2007_2024.xlsx"
+file2 <- "oil_price_2007-2024.xlsx"
+file3 <- "annual_oil_production_1972-2023.xlsx"
+file4 <- "oil_data_2007_2024.xlsx"
+
+file_path1 <- file.path(data_dir, file1)
+file_path2 <- file.path(data_dir, file2)
+file_path3 <- file.path(data_dir, file3)
+file_path4 <- file.path(data_dir, file4)
+
+oil_production <- read_excel(file_path1) %>% clean_names()
+oil_prices <- read_excel(file_path2) %>% clean_names()
+annual_oil_production <- read_excel(file_path3) %>% clean_names()
+oil_data <- read_excel(file_path4) %>% clean_names()
+
+```
+
+
+
+```{r AnnualData, echo=F, results='hide', warning=FALSE}
+
+### Wrangling data
+
+annual_data_72_2023 <- annual_oil_production |>
+  slice(-1:-14) |>               
+  select(2, 8) |>                     
+  setNames(c("year", "annual_production")) |> 
+  filter(!(is.na(year) & is.na(annual_production))) %>%
+  mutate(
+    year = as.numeric(year),
+    annual_production = as.numeric(annual_production),
+    annual_production = as.numeric(annual_production) * 1000 
+  )
+
+output_file1 <- file.path(output_dir, "oil_data_72_2023.xlsx")
+write_xlsx(annual_data_72_2023, path = output_file1)
+
+```
+
+```{r MonthlyData, echo=F, results='hide', warning=FALSE}
+
+### Wrangling data
+
+oil_data <- oil_production |>
+  left_join(oil_prices, by = "date") |>
+  select(-month.y, -year.y, -month.x, -year.x) |>
+  mutate(date = as.Date(date)) |>
+  select(date, everything())
+
+
+output_file2 <- file.path(output_dir, "oil_data_2007_2024.xlsx")
+write_xlsx(oil_data, path = output_file2)
+  
+#I forced to 0 all the NA in our processed data
+oil_data1<-oil_data %>%
+  replace_na(list(barrels_b043 = 0, b043_share = 0))
+
+#Trim the table to include only columns you need
+noil <- ncol(oil_data1)-2
+nobs <- nrow(oil_data1) 
+
+```
+
+## Introduction
+
+Ecuador's economy has been heavily reliant on oil exploitation for over five decades. As is shown in [@garcia-alban_good_2021] a result, the oil revenue is the most important driver of the national GDP.
+
+![GDP fluctuations vs oil revenue between 2004-2019](images/Image1.png.jpg)
+
+## Motivation
+
+-   The oil well known as Block 43-ITT is located within Ecuador’s Yasuní National Park—one of the most biodiverse places on Earth and home to Indigenous communities [@unescoMainInitiativesYasuni2024].
+
+-   Oil exploitation in that well began in 2016 as part of efforts to boost fiscal revenues [@banco_central_del_ecuador_estudio_2023].
+
+-   In the 2023 national referendum, the Ecuadorian population voted to halt extraction in that well [@corteconsitutionaldelecuadorCaseNo622CP2023]. ​
+
+-   The decision was driven by the growing environmental and Indigenous rights movement and marked a significant shift in Ecuador’s natural resource policy.​
+
+## Relevance
+
+The government is now responsible for phasing out extraction while addressing the economic implications—especially those related to oil production levels and public revenues.​ Evaluating how reduced production affects overall output is critical for policy and planning future decisions on resource management.
+
+## Objectives
+
+-   This final project aims to forecast oil production in Ecuador for the forthcoming years, following the halt of extraction in Block 43-ITT, which raises questions about future national income.​
+
+## Dataset information
+
+-   Our dataset has monthly information from 2007-2024 for oil production: ​
+
+    -   Total and disaggregated for Block 43-ITT (from 2016 to 2023) and for the rest of the wells (data provided by the Government of Ecuador).​
+
+-   Annual oil barrel production for 1972-2024 + 2025-2029 expected production (public data).​
+
+-   WTI monthly prices for 2007-2024.
+
+## Analysis (Methods and Models)
+
+-   **Stage A** (Annual-Level Analysis):​
+
+    -   We use an annual series (1972–2024) to analyze the long-run production trend.
+
+-   **Stage B** (Monthly-Level Analysis)​
+
+    -   We use monthly dataset (2007–2024) for a more detailed (higher-frequency) forecast.​
+
+    -   Additional variables:​
+
+        -   Monthly WTI prices​
+
+        -   Monthly block-level production of Block 43 ITT.
+
+-   **Stage C** (Scenario analysis)​
+
+    The idea is that if we trust the long-run historical trend from the annual model, we can ensure that the sum our monthly forecasts matches the trend predicted by the annual model. ​
+
+    -   **Baseline forecast:** assuming Block 43 ITT continues as historical.​
+
+    -   **Shutdown Scenario:** set Block 43 ITT output to zero in 2024.​
+
+The difference in total production between the baseline and shutdown forecasts is the gap that other blocks must fill to maintain the same output level.​
+
+
+
+### Stage A (Annual-Level Analysis):
+
+We used an annual series (1972–2024) to analyze the long-run production trend.​
+
+#### Annual Data
+
+The chart below illustrates the trajectory of Ecuador’s annual oil output, which surged dramatically from the 1970s through the early 2000s. Following this period of rapid growth, production plateaued but remained substantially higher than pre-2000 levels. By the early 2020s, output had gradually declined to around 170 million barrels, possibly influenced by aging fields, constrained investment, the effects of the pandemic, or a combination of all. 
+
+The solely visualization may suggest that including data from before 2000 —when output was only a fraction of its subsequent levels— could distort our model’s parameters. In contrast, restricting the sample to the period from 2000 onward, when production stabilized at its modern scale, is likely to yield a more accurate and relevant time series and forecasts. Considering this, analyzing the Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF) could provide valuable insights for determining the most appropriate research period, helping to identify patterns and lags in the data.
+
+```{r TSAnnual, echo=F, warning=FALSE}
+annual_ts <- ts(annual_data_72_2023[,2],
+                start = c(1972, 1),
+                frequency = 1)
+p1 <- autoplot(annual_ts)
+print(p1)
+```
+
+The sample ACF for the full series reveals strong autocorrelation extending up to approximately the 15 lag, beyond which the correlations sharply diminish, falling within the significance bounds for several years. This decline signals that the pre-2000 data may not exhibit meaningful memory. Similarly, the PACF presents a single significant spike at lag 1, which may suggest an AR(1) structure for the series.
+
+From that information and given that pre-2000 output levels are an order of magnitude lower than post-2000 production and introduce disruptive long-lag noise, we confined our model to the 2000–2023 period, aiming at the model to gain precision and isolating the data’s most relevant structural characteristics.
+
+```{r plotACFPACF, echo=F, warning=FALSE}
+
+#Plot of ACF and PACF together
+
+old_par <- par(no.readonly = TRUE)
+
+# set up 1 row, 2 columns
+par(mfrow = c(1, 2))
+annual_acf <- acf(annual_ts, lag = 51, plot = TRUE,main="")
+annual_pacf <- pacf(annual_ts, lag = 51, plot = TRUE,main="")
+par(old_par)
+```
+
+All the annual forecasting models were trained using data up to the year 2020. Because when using the pre-pandemic period, forecast performed poorly (see Annex).
+
+```{r training, echo=F, warning=FALSE}
+
+#training
+annual_ts_train <- window(annual_ts,
+                          start= c(2000,1),
+                end= c(2020, 1),
+                frequency = 1)
+
+ts_daily_test <- window(annual_ts,
+                start= c(2021, 1),
+                frequency = 1)
+```
+
+
+##### Model 1: ARIMA
+
+The "auto.arima" in the training time series, suggests using the ARIMA(0,1,0) model captures the general trend of Ecuador's oil production over time but demonstrates moderate accuracy when handling the data's inherent volatility (See Table 1). With a mean absolute percent error (MAPE) of 0.94 (94% error) and RMSE of approximately 2 million units, the model's performance is acceptable but not exceptional. The forecast shows relatively stable future production levels, though the wide confidence intervals (gray bands) indicate substantial uncertainty in these predictions. The Theil's U value of 0.54 suggests that while the model outperforms naive forecasting approaches, there remains considerable room for improvement in capturing the time series' complex patterns and fluctuations.
+
+```{r ARIMA}
+
+#Model 1: ARIMA
+# Fit an ARIMA model to the annual time series and forecast for 3 years
+model_arima <- auto.arima(annual_ts_train)
+forecast_arima <- forecast(model_arima, h = 3)
+print(forecast_arima)
+
+# Plot the forecast
+plot(forecast_arima)
+
+
+#Plot model + observed data
+autoplot(annual_ts) +
+  autolayer(forecast_arima, series="AutoArima",PI=FALSE) +
+  ylab("Annual oil production Ecuador")
+
+```
+
+##### Testing Model 2:  MEAN
+
+The Mean model employs a much simpler approach than ARIMA, that generates a flat forecast (blue dots) at approximately 181 million barrels with a wide confidence intervals, indicating high uncertainty. Besides, its performance metrics (see Table 1) reveal significant weaknesses, with a much higher RMSE (7,781,977) compared to ARIMA and a concerning MAPE of 4.42 (442% error). Moreover, according to the model's Theil's U value of 2.77 indicates it performs worse than naive forecasting methods, essentially failing to capture any of the time series' patterns or fluctuations.
+
+```{r MEAN, echo=TRUE, message=FALSE, warning=FALSE}
+#Model 2: Arithmetic mean on original data
+MEAN_seas <- meanf(y = annual_ts_train, h = 3)
+print(MEAN_seas)
+plot(MEAN_seas)
+
+autoplot(annual_ts) +
+  autolayer(MEAN_seas, series="MEAN",PI=FALSE) +
+  ylab("Production")
+
+```
+
+##### Testing Model 3: ETS
+
+The ETS model effectively "locks in" the most recent observed level (approximately 175 million barrels) and extrapolates it forward, producing a flat forecast line characterized by moderately narrow confidence bands. This tighter band of uncertainty, compared to the mean model’s wider fan, reflects ETS's ability to adapt to the stable, modern production regime rather than being swayed by earlier, lower historical levels.
+
+In-sample (see Table 1), the model under-forecasts by an average of 1.6 million barrels (ME), achieving a MAPE below 1 percent (around 0.95%). A Theil’s U statistic of 0.54 confirms that it outperforms a naive "no-change" forecast. However, the pronounced negative autocorrelation at lag 1 indicates that the ETS model struggles to capture some of the smoother, year-over-year momentum inherent in the data.
+
+```{r ETS, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Model 3: ETS (Exponential Smoothing without seasonality)
+model_ets <- ets(annual_ts_train)
+forecast_ets <- forecast(model_ets, h = 3)
+print(forecast_ets)
+
+plot(forecast_ets)
+
+autoplot(annual_ts) +
+  autolayer(forecast_ets, series="ETS",PI=FALSE) +
+  ylab("Production")
+```
+  
+##### Testing Model 4: HOLT
+
+Holt’s method augments simple exponential smoothing with a linear trend, and its forecast barely moves from the last observed level (around 175 million barrels), producing an almost flat‐looking line with even wider uncertainty bands than ETS. It stands out that its Theil’s U is 1.09, which would suggests it actually performs worse than a naïve method.
+
+```{r Holt, echo=TRUE, message=FALSE, warning=FALSE}
+# Model 4: Holt's Linear Trend method
+model_holt <- holt(annual_ts_train, h = 3)
+forecast_holt <- forecast(model_holt, h = 3)
+print(forecast_holt)
+
+plot(forecast_holt)
+
+autoplot(annual_ts) +
+  autolayer(forecast_holt, series="HOLT",PI=FALSE) +
+  ylab("Production")
+```
+
+### Compare performance metrics of all models for the annual analysis
+
+```{r Accuracy, echo=TRUE, message=FALSE, warning=FALSE}
+#Model 1: ARIMA
+ARIMA_scores <- accuracy(forecast_arima$mean,ts_daily_test)  #store the performance metrics
+
+#Model 2: Arithmetic mean 
+MEAN_scores <- accuracy(MEAN_seas$mean,ts_daily_test)
+
+# Model 3:  ETS
+ETS_scores <- accuracy(forecast_ets$mean,ts_daily_test)
+
+# Model 4:  HOLT
+HOLT_scores <- accuracy(forecast_holt$mean,ts_daily_test)
+
+#create data frame
+models_scores <- as.data.frame(rbind(ARIMA_scores, MEAN_scores,ETS_scores,HOLT_scores ))
+row.names(models_scores) <- c("ARIMA", "MEAN","ETS","HOLT")
+                            
+```
+
+The following table compares the mentioned models accuracy, and shows how ARIMA beats the rest of the models, while ETS is the second best model
+
+```{r tablescores, echo=TRUE, message=FALSE, warning=FALSE}
+
+kbl(models_scores, 
+      caption = "Table 1. Forecast Accuracy for Annual Data",
+      digits = array(5,ncol(models_scores))) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  #highlight model with lowest RMSE
+  kable_styling(latex_options="striped", stripe_index = which.min(models_scores[,"RMSE"]))
+
+#choose model with lowest RMSE
+best_model_index <- which.min(models_scores[,"RMSE"])
+cat("The best model by RMSE is:", row.names(models_scores[best_model_index,])) 
+
+#choose model with lowest RMSE
+best_model_index2 <- which.min(models_scores[,"MAPE"])
+cat("The best model by MAPE is:", row.names(models_scores[best_model_index,])) 
+```
+
+Thus, we combined the two best models in aiming to have a more accurate model. By feeding the ETS errors into a simple AR(1), this hybrid forecast (red shading) sits almost exactly on today’s production level (around 175 million barrels) and produces the tightest uncertainty “cone” of all models. In back‐testing against 2021–2023 actuals (see Table 2), it under‐forecasted by only 0.66 million barrels on average (ME around –0.66 m), cutting its RMSE from ~2.0 m (pure ETS or ARIMA) down to 1.17 m and halving the MAPE to 0.54 %. The dramatic drop in MAE (to 0.93 m) and MAPE shows that capturing the year-to-year autocorrelation in the residuals yields materially more accurate point forecasts, while the narrower fan reflects increased confidence in the short‐term outlook.
+
+```{r ETS.AR, echo=TRUE, message=FALSE, warning=FALSE}
+
+# 1) Fit the base ETS
+ets_fit <- ets(annual_ts_train)
+
+# 2) Extract residuals and fit an AR(1) (no constant) to them
+resid_ets <- residuals(ets_fit)
+ar1_fit   <- Arima(resid_ets, order = c(1,0,0), include.mean = FALSE)
+
+# 3) Forecast both models out h steps
+h <- 3
+ets_fc   <- forecast(ets_fit, h = h)
+resid_fc <- forecast(ar1_fit, h = h)
+
+# 4) Combine the forecasts
+hybrid_fc        <- ets_fc
+#colnames(hybrid_fc$lower)
+#colnames(hybrid_fc$upper)
+hybrid_fc$mean   <- ets_fc$mean   + resid_fc$mean
+hybrid_fc$lower  <- ets_fc$lower  + resid_fc$lower
+hybrid_fc$upper  <- ets_fc$upper  + resid_fc$upper
+
+# 5) Or extract a neat table of point‐forecasts + 95% intervals:
+print(colnames(hybrid_fc$lower))  # e.g. "80%" or c("80%", "95%")
+
+# 6) Build a table by position
+hybrid_df <- data.frame(
+  Year     = time(hybrid_fc$mean),
+  Forecast = as.numeric(hybrid_fc$mean),
+  Lo80     = hybrid_fc$lower[,1],
+  Hi80     = hybrid_fc$upper[,1],
+  Lo95     = if(ncol(hybrid_fc$lower)>=2) hybrid_fc$lower[,2] else NA,
+  Hi95     = if(ncol(hybrid_fc$upper)>=2) hybrid_fc$upper[,2] else NA
+)
+print(hybrid_df)
+
+# 6) Plot the result
+autoplot(annual_ts) +
+  autolayer(hybrid_fc, series="ETS+AR(1)", PI=TRUE) +
+  ylab("Production") +
+  ggtitle("Hybrid ETS(.,.,.) + AR(1) Forecast")
+  
+```
+
+```{r Accuracy2, echo=TRUE, message=FALSE, warning=FALSE}
+# 1) Compute hybrid accuracy
+Hyb_scores <- accuracy(hybrid_fc$mean,ts_daily_test)
+
+# 1) bind all five score‐objects into one data.frame
+models_scores2 <- as.data.frame(rbind(
+  ARIMA                  = ARIMA_scores,
+  MEAN                   = MEAN_scores,
+  ETS                    = ETS_scores,
+  HOLT                   = HOLT_scores,
+  `Hybrid ETS & AR(1)`   = Hyb_scores
+))
+
+# 2) (re)name the rows for display  
+rownames(models_scores2) <- c(
+  "ARIMA", "MEAN", "ETS", "HOLT", "Hybrid ETS & AR(1)"
+)
+
+# 3) render the table; this must be the last expression in the chunk
+models_scores2 %>%
+  kbl(
+    caption = "Table 2. Forecast Accuracy for Annual Data",
+    digits  = array(5, ncol(models_scores2)),
+    row.names = TRUE
+  ) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  kable_styling(
+    latex_options = "striped",
+    stripe_index  = which.min(models_scores2$RMSE)
+  )
+print(models_scores2)
+
+# 4) now print out which model is best by RMSE and MAPE
+best_rmse <- rownames(models_scores2)[which.min(models_scores2$RMSE)]
+best_mape <- rownames(models_scores2)[which.min(models_scores2$MAPE)]
+
+cat("The best model by RMSE is:", best_rmse, "\n")
+cat("The best model by MAPE is:", best_mape, "\n")
+```
+Now we use the hybrid model for our data from 2000 to 2023. This model captured the long-term level and then added an AR(1) on its one-step residuals to restore the small year-to-year momentum that pure ETS missed. The outcome is a flat forecast of about 173 million barrels per year from 2024 through 2027, with an 80 % confidence band narrowing to roughly 128–219 million and a 95 % band of 103–244 million barrels.
+
+```{r}
+# Filter the original from 2000 to 2023
+annual_ts_2023 <- window(annual_ts, start = c(2000, 1), end = c(2023, 1))
+
+# 1) Fit the base ETS on 2000–2023
+ets_fit2   <- ets(annual_ts_2023)
+
+# 2) Extract one‐step residuals and fit AR(1) to them
+resid_ets2 <- residuals(ets_fit2)
+ar1_fit2   <- Arima(resid_ets2, order=c(1,0,0), include.mean=FALSE)
+
+# 3) Forecast each component h years ahead
+h2 <- 4
+ets_fc2   <- forecast(ets_fit2,   h = h2, level = c(80, 95))
+resid_fc2 <- forecast(ar1_fit2,   h = h2, level = c(80, 95))
+colnames(ets_fc2$lower)
+colnames(resid_fc2$lower)
+
+# 4) Build the hybrid forecast object
+hybrid_fc2        <- ets_fc2
+hybrid_fc2$mean   <- ets_fc2$mean   + resid_fc2$mean
+hybrid_fc2$lower  <- ets_fc2$lower  + resid_fc2$lower
+hybrid_fc2$upper  <- ets_fc2$upper  + resid_fc2$upper
+
+# 5) Print the 80% and 95% intervals
+hybrid_df2 <- data.frame(
+  Year     = time(hybrid_fc2$mean),
+  Forecast = as.numeric(hybrid_fc2$mean),
+  Lo80     = hybrid_fc2$lower[, 1],  # first column = 80%
+  Hi80     = hybrid_fc2$upper[, 1],
+  Lo95     = hybrid_fc2$lower[, 2],  # second column = 95%
+  Hi95     = hybrid_fc2$upper[, 2]
+)
+print(hybrid_df2)
+
+# 6) Plot: historical 2000–2023 + 2024–2026 hybrid forecast
+autoplot(annual_ts_2023) +
+  autolayer(hybrid_fc2, series="ETS+AR(1)", PI=TRUE) +
+  ylab("Annual Oil Production (barrels)") +
+  ggtitle("Hybrid ETS(.,.,.) + AR(1) Forecast: 2000–2026")
+
+```
+The residuals fluctuate randomly around zero with no obvious drift or changing variance, and—aside from a single large error in the mid-2000s—stay within about ±20 million barrels. Moreover, the ACF shows all lags inside the 95 % confidence bounds (lag 4 is barely crossing the bounds, but we would say there is no meaningful serial correlation). The histogram of errors looks symmetric (with slightly tails from that outlier). In brief, they behave like white noise, suggesting our hybrid ETS+AR(1) captured the main dynamics of Ecuador’s oil‐production series.
+
+```{r Residuals}
+checkresiduals(hybrid_fc2)
+
+```
+Finally, we observed that Ecuador’s projected a higher production for 2026 & 2027, however, there was no information on the additional data they used for their forecasting. However it is worth noting that projections for 2026 would be historic volumes as is slightly above annual production in previous years.
+
+```{r}
+# 1. Filter existing data from 2000 to 2023
+expected_production <- annual_data_72_2023 %>%
+  filter(year >= 2000, year <= 2023)
+
+# 2. Create a data frame for 2024–2027: data from https://www.primicias.ec/economia/plan-hidrocarburifero-inversiones-petroleo-gobierno-noboa-88061/
+daily_values <- c(475.27, 508.09, 600.72, 539.252)  # daily production according to Ecuador's gov
+future_years <- 2024:2027
+
+df_future <- data.frame(
+  year = future_years,
+  annual_production = daily_values * 1000 * 365
+)
+
+# 3. Combine the filtered data with the new rows
+expected_production <- bind_rows(expected_production, df_future)
+
+annual_exp_ts <- ts(expected_production[,2],
+                start = c(2000, 1),
+                frequency = 1)
+
+
+# 6. Plot the ARIMA forecast and government expected production together
+autoplot(hybrid_fc2) +
+  autolayer(annual_exp_ts, series = "Government Expected", linetype = "dashed", color = "darkblue") +
+  xlab("Year") +
+  ylab("Annual Production") +
+  ggtitle("ARIMA Forecast vs. Government Expected Production (2024-2027)") +
+  guides(colour = guide_legend(title = "Series"))
+
+```
+### Stage B (Month-Level Analysis):
+
+This is a more detailed monthly analysis from 2007–2024 using monthly WTI prices and Block 43 production.The following graphs shows oil production in Ecuador has been decreasing. Oil extraction in Block 43-ITT started in 2016 and has boosted the economy. Plot 4 shows that oil exploitation on Block 43-ITT has increased production from 2016 to 2023, reaching up to 17% of the total oil production. 
+
+
+```{r 1, echo=F, warning=FALSE}
+p1 <-ggplot(oil_data1, aes(x = date, y = barrels_total)) +
+  geom_line(color = "blue") +
+  scale_y_continuous(labels = number_format(scale = 1/1e6, suffix = "M")) +
+  labs(title = "Plot 1: Monthly Oil Production in Ecuador", x = "Date", y = "Oil production") +
+  theme_classic()
+
+#print(p1)
+
+p2 <-ggplot(oil_data1, aes(x = date, y = wti_oil_price)) +
+  geom_line(color = "darkgreen") +
+  labs(title = "Plot 2: Monthly WTI Prices", x = "Date", y = "WTI Price")+
+  theme_classic()
+
+#print(p2)
+
+p3<- ggplot(oil_data1, aes(x = date, y = barrels_b043)) +
+  geom_line(color = "red") +
+  scale_y_continuous(labels = number_format(scale = 1/1e6, suffix = "M")) +
+  labs(title = "Plot 3:Monthly Block 43 ITT ", x = "Date", y = "Block 43 ITT Production") +
+  theme_classic()
+
+#print(p3)
+
+p4<- ggplot(oil_data1, aes(x = date, y = b043_share)) +
+  geom_line(color = "black") +
+  labs(title = "Plot 4:Percentage of monthly Block 43 ITT", x = "Date", y = "% from the total production") +
+  theme_classic()
+
+#print(p4)
+
+(p1 | p2) /
+(p3 | p4)
+
+```
+
+```{r 2, echo=F, warning=FALSE}
+
+ts_oil_total <- ts(oil_data1[,2],
+                           start=c(2007,1),
+                           frequency=12) 
+
+ts_oil_b043 <- ts(oil_data1[,3],
+                           start=c(2007,1),
+                           frequency=12) 
+
+ts_oil_price <- ts(oil_data1[,6],
+                           start=c(2007,1),
+                           frequency=12) 
+```
+
+
+```{r 3, echo=F, warning=FALSE}
+
+# ACF and PACF for Production
+p5 <- as.ggplot(function() {
+  Acf(ts_oil_total, lag.max = 40, main = "ACF of Total Production")
+})
+
+
+p6<- as.ggplot(function() {
+  Pacf(ts_oil_total, lag.max = 40, main = "PACF of Total Production")
+})
+
+
+p5 + p6
+
+
+```
+
+
+
+```{r 4, echo=F, warning=FALSE}
+
+# 1. Decompose the time series
+decomp_prod <- decompose(ts_oil_total, type = "additive")
+
+# 2. Create decomposition plot (p7) using autoplot
+p7 <- autoplot(decomp_prod) + 
+       labs(title = "Time Series Decomposition")
+
+# 3. Deseasonalize using the CORRECT decomposition object
+deseasonal_prod <- seasadj(decomp_prod)
+
+# 4. Create comparison plot (p8)
+p8 <- autoplot(ts_oil_total, series = "Original") +
+      autolayer(deseasonal_prod, series = "Deseasonalized") +
+      labs(title = "Original vs. Deseasonalized Series")
+
+# 5. Combine plots vertically with patchwork
+p7 / p8 + plot_layout(ncol = 1)
+
+# Perform ADF test on the deseasonalized Production series
+adf_result <- adf.test(deseasonal_prod, alternative = "stationary")
+print(adf_result)
+
+
+```
+```{r 5, echo=F, warning=FALSE}
+
+#Train/Test
+
+# Restrict the production series to data until the end of 2023
+ts_oil_total_2023 <- window(ts_oil_total, end = c(2023, 12))
+deseasonal_prod_2023 <- window(deseasonal_prod, end = c(2023, 12))
+oil_data_2023 <- oil_data1[oil_data1$date <= as.Date("2023-12-31"), ]
+xreg_all_2023 <- cbind(WTI = oil_data_2023$wti_oil_price, Block43 = oil_data_2023$barrels_b043)
+price_regressor_2023 <- oil_data_2023$wti_oil_price
+
+# Define forecast horizon
+n_for <- 12
+n_total <- length(ts_oil_total_2023)
+n_total_des <- length(deseasonal_prod_2023)
+
+# For Model A (total series)
+ts_train_A <- window(ts_oil_total_2023, end = time(ts_oil_total_2023)[n_total - n_for])
+ts_test_A <- window(ts_oil_total_2023, start = time(ts_oil_total_2023)[n_total - n_for + 1])
+
+# For Model B (deseasonalized series)
+
+ts_train_B <- window(deseasonal_prod_2023, end = time(deseasonal_prod_2023)[n_total_des - n_for])
+ts_test_B <- window(deseasonal_prod_2023, start = time(deseasonal_prod_2023)[n_total_des - n_for + 1])
+
+ts_train_C <- window(ts_oil_total, end = time(ts_oil_total)[n_total - n_for])
+ts_test_C <- window(ts_oil_total, start = time(ts_oil_total)[n_total - n_for + 1])
+
+
+# For exogenous regressors:
+xreg_train <- xreg_all_2023[1:(n_total - n_for), ]
+xreg_test <- xreg_all_2023[(n_total - n_for + 1):n_total, ]
+price_train <- price_regressor_2023[1:(n_total - n_for)]
+price_test <- price_regressor_2023[(n_total - n_for + 1):n_total]
+
+# Forecast horizon
+h <- n_for
+```
+
+#### Model 1
+
+```{r model-sarima}
+# Model A: Baseline SARIMA on total production
+model_1_train <- auto.arima(ts_train_A, seasonal = TRUE)
+
+# Forecast for Model A
+forecast_1 <- forecast(model_1_train, h = h)
+
+print(forecast_1)
+
+# Plot the forecast
+plot(forecast_1)
+
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_1, series="Sarima",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+checkresiduals(model_1_train)
+
+```
+
+#Model 2:
+
+```{r model-sarimax}
+
+# Model B: SARIMAX on deseasonalized production with regressors
+model_2_train <- auto.arima(ts_train_B, xreg = xreg_train, seasonal = TRUE)
+
+# Forecast for Model B (with xreg)
+forecast_2 <- forecast(model_2_train, xreg = xreg_test, h = h)
+
+print(forecast_2)
+
+# Plot the forecast
+plot(forecast_2)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_2, series="Sarimax",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+checkresiduals(model_2_train)
+```
+
+#Model 3
+
+```	{r model-arimax}
+# Model 3: ARIMAX on deseasonalized production with regressors
+model_3_train <- auto.arima(ts_train_A, xreg = xreg_train, seasonal = TRUE)
+
+# Forecast for Model C (with xreg)
+forecast_3 <- forecast(model_3_train, xreg = xreg_test, h = h)
+
+print(forecast_3)
+
+# Plot the forecast
+plot(forecast_3)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_3, series="Arimax",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+checkresiduals(model_3_train)
+```
+
+#Model 4
+
+```{r model-mean}
+# Model 4
+model_4_train <- meanf(ts_train_A, h = h)
+
+# Plot the forecast
+plot(model_4_train)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(model_4_train, series="Mean",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+
+checkresiduals(model_4_train)
+```
+
+```{r model-ets}
+# Model 5: 
+model_5_train <- ets(ts_train_A, model = "ANN")
+
+# Forecast for Model 5
+forecast_5 <- forecast(model_5_train, h = h)
+
+print(forecast_5)
+
+# Plot the forecast
+plot(forecast_5)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_5, series="ETS",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+
+checkresiduals(model_5_train)
+```
+
+```{r model-tbats}
+# Model 6: 
+model_6_train <- tbats(ts_train_A)
+
+# Forecast for Model 6
+forecast_6 <- forecast(model_6_train, h = h)
+
+print(forecast_6)
+
+# Plot the forecast
+plot(forecast_6)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_6, series="TBATS",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+checkresiduals(model_6_train)
+
+```
+
+```{r model-nnetar}
+# Model 7: 
+model_7_train <- nnetar(ts_train_A)
+
+# Forecast for Model 7
+forecast_7 <- forecast(model_7_train, h = h)
+
+print(forecast_7)
+
+# Plot the forecast
+plot(forecast_7)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_7, series="Neural Network",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+checkresiduals(model_7_train)
+
+```
+
+```{r model-structts}
+# Model 8: 
+model_8_train <- StructTS(ts_train_A, type = "BSM")
+
+# Forecast for Model 8
+forecast_8 <- forecast(model_8_train, h = h)
+
+print(forecast_8)
+
+# Plot the forecast
+plot(forecast_8)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_8, series="StructTS",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+checkresiduals(model_8_train)
+```
+
+#Model 9
+
+```{r model-arimax-price}
+# Model 8: 
+model_9_train <- auto.arima(ts_train_A, 
+                             xreg = price_train, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+
+# Forecast for Model 8
+forecast_9 <- forecast(model_9_train, h = h, xreg = price_test)
+
+print(forecast_9)
+
+# Plot the forecast
+plot(forecast_9)
+
+#Plot model + observed data
+autoplot(ts_oil_total) +
+  autolayer(forecast_9, series="ARIMAX (Price Only)",PI=FALSE) +
+  ylab("Monthly oil production Ecuador")
+
+
+checkresiduals(model_9_train)
+```
+
+
+```{r accuracy-comparison}
+
+#Model 1
+SARIMA_scores <- accuracy(forecast_1$mean, ts_test_A)
+
+#Model 2
+SARIMAX_scores <- accuracy(forecast_2$mean, ts_test_B)
+
+#Model 3
+ARIMAX_scores <- accuracy(forecast_3$mean, ts_test_A)
+
+#Model 4
+Mean_scores <- accuracy(model_4_train$mean, ts_test_A)
+
+#Model 5
+ETS_scores <- accuracy(forecast_5$mean, ts_test_A)
+
+#Model 6
+TBATS_scores <- accuracy(forecast_6$mean, ts_test_A)
+
+#Model 7
+NN_scores <- accuracy(forecast_7$mean, ts_test_A)
+
+#Model 8
+StructTS_scores <- accuracy(forecast_8$mean, ts_test_A)
+
+#Model 9
+Arimax_p_scores <- accuracy(forecast_9$mean, ts_test_A)
+```
+
+
+```	{r accuracy-table}
+# Combine in a table for easy comparison
+models_scores <- as.data.frame(rbind(SARIMA_scores, SARIMAX_scores,ARIMAX_scores,
+                                     Mean_scores,ETS_scores, TBATS_scores,
+                                     NN_scores,StructTS_scores, Arimax_p_scores ))
+row.names(models_scores) <- c("SARIMA", "SARIMAX", "ARIMAX",
+                              "Mean","ETS", "TBATS",
+                                     "NN","StructTS", "Arimax_p")
+print(models_scores)
+
+#choose model with lowest RMSE
+best_model_index <- which.min(models_scores[,"RMSE"])
+cat("The best model by RMSE is:", row.names(models_scores[best_model_index,])) 
+```
+
+
+```{r forecast-comparison}
+
+autoplot(ts_oil_total) +
+  autolayer(forecast_1, series = "Model 1: SARIMA", PI = FALSE) +
+  autolayer(forecast_2, series = "Model 2: SARIMAX", PI = FALSE) +
+  autolayer(forecast_3, series = "Model 3: ARIMAX", PI = FALSE) +
+  autolayer(model_4_train, series = "Model 4: Mean", PI = FALSE) +
+  autolayer(forecast_5, series = "Model 5: ETS", PI = FALSE) +
+  autolayer(forecast_6, series = "Model 6: TBATS", PI = FALSE) +
+  autolayer(forecast_7, series = "Model 7: NN", PI = FALSE) +
+  autolayer(forecast_8, series = "Model 8: StructTS", PI = FALSE) +
+  autolayer(forecast_8, series = "Model 9: Arimax_p", PI = FALSE) +
+  ggtitle("Forecast Comparison") +
+  xlab("Time") + ylab("Production")+
+  guides(colour=guide_legend(title="Forecast"))
+
+```
+
+```{r forecast-accuracy-kable}
+kbl(models_scores, 
+      caption = "Forecast Accuracy for Monthly Data",
+      digits = array(9,ncol(models_scores))) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  #highlight model with lowest RMSE
+  kable_styling(latex_options="striped", stripe_index = which.min(models_scores[,"RMSE"])) %>%
+  kable_styling(full_width = FALSE) %>%
+  row_spec(6, bold = TRUE, background = "#F0F0F0")  # highlight best MAPE
+
+
+```
+
+#Scenario Analysis
+
+TBATS—the best‐performing model among the nine—to conduct the scenario analysis. Because TBATS is a univariate model, we estimated the Block 43 contribution separately. Our approach compute the average monthly production from Block 43 during a recent period and then “remove” that contribution from the TBATS baseline forecast to simulate a shutdown. In other words, the shutdown scenario forecast equals the TBATS baseline forecast minus the estimated Block 43 production.
+
+```{r tbats-scenario-steps}
+
+#The code proceeds as follows:
+
+#Fit a TBATS model to the total production series through 2023.
+#Generate a baseline forecast using TBATS.
+#Compute the average Block 43 production over the last 12 months (or use a ramp‐down vector).
+#Create a “shutdown scenario” forecast by subtracting that average from the TBATS forecast.
+#Compute and plot the production gap.
+
+
+```
+
+
+```	{r tbats-fit}
+#Fit TBATS Model on Total Production
+tbats_model <- tbats(ts_oil_total_2023)
+forecast_baseline <- forecast(tbats_model, h = h)
+print(forecast_baseline)
+
+```
+
+
+```{r block43-average}
+# Estimate Block 43 Contribution 
+# Here, we compute the average monthly production from Block43 over the last 12 months.
+average_block43 <- mean(tail(oil_data_2023$barrels_b043, 12))
+cat("Average monthly Block 43 production:", average_block43, "\n")
+
+# Alternatively, you could create a ramp-down vector if you expect a gradual shutdown.
+# For a simple case, we use a constant value:
+block43_shutdown <- rep(average_block43, h)  # this will be subtracted from the baseline
+
+```
+
+
+```{r shutdown-scenario}
+
+# Create Shutdown Scenario Forecast 
+# The shutdown scenario forecast is computed by subtracting Block43's contribution.
+forecast_shutdown <- forecast_baseline
+forecast_shutdown$mean <- forecast_baseline$mean - block43_shutdown
+
+# Compute Production Gap 
+production_gap <- forecast_baseline$mean - forecast_shutdown$mean
+cat("Production gap (per month):\n")
+print(production_gap)
+
+```
+
+
+```{r gap-calculation}
+total_gap <- sum(production_gap)  # Sum of all monthly losses
+avg_gap   <- mean(production_gap) # Mean monthly loss
+cat("Average monthly production gap:", avg_gap, "\n")
+cat("Total production gap over the forecast period:", total_gap, "\n")
+```
+
+
+```{r scenario-plot}
+
+
+# Plot the Forecast Scenarios 
+autoplot(forecast_baseline) +
+  autolayer(forecast_shutdown, series = "Shutdown Scenario", PI = FALSE) +
+  ggtitle("TBATS Forecast: Baseline vs. Block 43 Shutdown Scenario") +
+  xlab("Time") + ylab("Total Oil Production") +
+  guides(colour = guide_legend(title = "Scenario"))
+
+
+```
+
+
+```{r aggregate-forecast}
+forecast_obj <- forecast(tbats_model, h = 24)  # forecast 2 years ahead, for example
+# Aggregate the monthly forecast to annual totals.
+# 'nfrequency = 1' converts the series to annual frequency.
+annual_forecast <- aggregate(forecast_obj$mean, nfrequency = 1, FUN = sum)
+
+print(annual_forecast)
+```
+
+
+
+```{r annual-forecast-plot}
+autoplot(annual_forecast, series = "Aggregated Forecast") +
+  autolayer(annual_ts_2023, series = "Historical Annual Data", PI = FALSE) +
+  ggtitle("Annual Aggregated Forecast vs. Historical Annual Data") +
+  xlab("Year") + ylab("Annual Total Oil Production") +
+  guides(colour = guide_legend(title = "Series"))
+```
+
+
+## Summary and Conclusions
+
+```	{r summary-conclusions}
+
+```
+
+
+## References
+
+
+
+
